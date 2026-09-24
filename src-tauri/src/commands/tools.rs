@@ -63,7 +63,11 @@ pub async fn get_tool_status(
     store: State<'_, Arc<SkillStore>>,
 ) -> Result<Vec<ToolInfoDto>, AppError> {
     let store = store.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
+    tauri::async_runtime::spawn_blocking(move || list_tool_status_internal(&store))
+    .await?
+}
+
+pub fn list_tool_status_internal(store: &SkillStore) -> Result<Vec<ToolInfoDto>, AppError> {
         let start = Instant::now();
         let infos = tool_service::list_tool_info(&store);
         let count = infos.len();
@@ -87,8 +91,6 @@ pub async fn get_tool_status(
             log::info!("get_tool_status: {count} tools in {elapsed_ms} ms");
         }
         Ok(result)
-    })
-    .await?
 }
 
 fn refresh_tray_menu_best_effort(app: &AppHandle) {
@@ -148,13 +150,23 @@ pub async fn set_all_tools_enabled(
 ) -> Result<(), AppError> {
     let store = store.inner().clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
+        set_all_tools_enabled_internal(&store, enabled)
+    })
+    .await?;
+    if result.is_ok() {
+        refresh_tray_menu_best_effort(&app);
+    }
+    result
+}
+
+pub fn set_all_tools_enabled_internal(store: &SkillStore, enabled: bool) -> Result<(), AppError> {
         if enabled {
-            set_disabled_tools(&store, &[])?;
+            set_disabled_tools(store, &[])?;
             // Re-sync active scenario skills to all (now-enabled) installed tools
             if let Ok(Some(active_id)) = store.get_active_scenario_id() {
                 // Enabling the tools succeeded either way; a target we may not
                 // replace is reported, not fatal (#363).
-                match sync_scenario_skills(&store, &active_id) {
+                match sync_scenario_skills(store, &active_id) {
                     Ok(refusals) => {
                         for refusal in refusals {
                             log::warn!("enable-all-tools sync skipped a target: {refusal}");
@@ -165,19 +177,13 @@ pub async fn set_all_tools_enabled(
             }
             Ok(())
         } else {
-            let adapters = tool_adapters::all_tool_adapters(&store);
+            let adapters = tool_adapters::all_tool_adapters(store);
             let all_keys: Vec<String> = adapters.iter().map(|a| a.key.clone()).collect();
             for adapter in &adapters {
-                unsync_all_for_tool(&store, &adapter.key);
+                unsync_all_for_tool(store, &adapter.key);
             }
-            set_disabled_tools(&store, &all_keys)
+            set_disabled_tools(store, &all_keys)
         }
-    })
-    .await?;
-    if result.is_ok() {
-        refresh_tray_menu_best_effort(&app);
-    }
-    result
 }
 
 #[tauri::command]
@@ -208,7 +214,7 @@ fn is_builtin_key(key: &str) -> bool {
 
 /// Store side of [`set_custom_tool_path`], separated so the write can be
 /// tested against a real store without a Tauri runtime.
-pub(crate) fn apply_tool_skills_dir(
+pub fn apply_tool_skills_dir(
     store: &SkillStore,
     key: &str,
     path: &str,
@@ -265,28 +271,29 @@ pub async fn reset_custom_tool_path(
     store: State<'_, Arc<SkillStore>>,
 ) -> Result<(), AppError> {
     let store = store.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let old_adapter = tool_adapters::find_adapter_with_store(&store, &key)
+    tauri::async_runtime::spawn_blocking(move || reset_custom_tool_path_internal(&store, &key)).await?
+}
+
+pub fn reset_custom_tool_path_internal(store: &SkillStore, key: &str) -> Result<(), AppError> {
+        let old_adapter = tool_adapters::find_adapter_with_store(store, key)
             .ok_or_else(|| AppError::not_found(format!("Unknown tool: {key}")))?;
         let old_skills_dir = old_adapter.skills_dir();
 
-        let mut paths = get_custom_tool_paths(&store);
-        paths.remove(&key);
-        set_custom_tool_paths(&store, &paths)?;
+        let mut paths = get_custom_tool_paths(store);
+        paths.remove(key);
+        set_custom_tool_paths(store, &paths)?;
 
-        let new_adapter = tool_adapters::find_adapter_with_store(&store, &key)
+        let new_adapter = tool_adapters::find_adapter_with_store(store, key)
             .ok_or_else(|| AppError::not_found(format!("Unknown tool: {key}")))?;
         if old_skills_dir != new_adapter.skills_dir() {
-            reconcile_tool_sync_after_path_change(&store, &key);
+            reconcile_tool_sync_after_path_change(store, key);
         }
         Ok(())
-    })
-    .await?
 }
 
 /// Store side of [`set_custom_tool_project_path`], separated so the write can
 /// be tested against a real store without a Tauri runtime.
-pub(crate) fn apply_tool_project_skills_dir(
+pub fn apply_tool_project_skills_dir(
     store: &SkillStore,
     key: &str,
     project_relative_skills_dir: Option<&str>,
@@ -355,21 +362,22 @@ pub async fn reset_custom_tool_project_path(
     store: State<'_, Arc<SkillStore>>,
 ) -> Result<(), AppError> {
     let store = store.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
+    tauri::async_runtime::spawn_blocking(move || reset_custom_tool_project_path_internal(&store, &key)).await?
+}
+
+pub fn reset_custom_tool_project_path_internal(store: &SkillStore, key: &str) -> Result<(), AppError> {
         let key = key.trim().to_string();
         if key.is_empty() {
             return Err(AppError::invalid_input("Key is required"));
         }
-        if tool_adapters::find_adapter_with_store(&store, &key).is_none() {
+        if tool_adapters::find_adapter_with_store(store, &key).is_none() {
             return Err(AppError::not_found(format!("Unknown tool: {key}")));
         }
-        let mut project_paths = get_custom_tool_project_paths(&store);
+        let mut project_paths = get_custom_tool_project_paths(store);
         if project_paths.remove(&key).is_some() {
-            set_custom_tool_project_paths(&store, &project_paths)?;
+            set_custom_tool_project_paths(store, &project_paths)?;
         }
         Ok(())
-    })
-    .await?
 }
 
 #[tauri::command]
@@ -382,11 +390,23 @@ pub async fn add_custom_tool(
 ) -> Result<(), AppError> {
     let store = store.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
+        add_custom_tool_internal(&store, &key, &display_name, &skills_dir, project_relative_skills_dir.as_deref())
+    })
+    .await?
+}
+
+pub fn add_custom_tool_internal(
+    store: &SkillStore,
+    key: &str,
+    display_name: &str,
+    skills_dir: &str,
+    project_relative_skills_dir: Option<&str>,
+) -> Result<(), AppError> {
         let key = key.trim().to_string();
         let display_name = display_name.trim().to_string();
-        let skills_dir = normalize_skills_dir_input(&skills_dir)?;
+        let skills_dir = normalize_skills_dir_input(skills_dir)?;
         let project_relative_skills_dir = normalize_project_relative_skills_dir_input(
-            project_relative_skills_dir.as_deref().unwrap_or_default(),
+            project_relative_skills_dir.unwrap_or_default(),
         )?;
         if key.is_empty() || display_name.is_empty() || skills_dir.is_empty() {
             return Err(AppError::invalid_input(
@@ -395,13 +415,13 @@ pub async fn add_custom_tool(
         }
 
         // Validate key uniqueness
-        let all = tool_adapters::all_tool_adapters(&store);
+        let all = tool_adapters::all_tool_adapters(store);
         if all.iter().any(|a| a.key == key) {
             return Err(AppError::invalid_input(format!(
                 "Agent key \"{key}\" already exists"
             )));
         }
-        let mut customs = get_custom_tools(&store);
+        let mut customs = get_custom_tools(store);
         customs.push(CustomToolDef {
             key: key.clone(),
             display_name,
@@ -409,11 +429,9 @@ pub async fn add_custom_tool(
             project_relative_skills_dir,
             category: Default::default(),
         });
-        set_custom_tools(&store, &customs)?;
-        reconcile_tool_sync_after_path_change(&store, &key);
+        set_custom_tools(store, &customs)?;
+        reconcile_tool_sync_after_path_change(store, &key);
         Ok(())
-    })
-    .await?
 }
 
 #[tauri::command]
@@ -422,7 +440,10 @@ pub async fn remove_custom_tool(
     store: State<'_, Arc<SkillStore>>,
 ) -> Result<(), AppError> {
     let store = store.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
+    tauri::async_runtime::spawn_blocking(move || remove_custom_tool_internal(&store, &key)).await?
+}
+
+pub fn remove_custom_tool_internal(store: &SkillStore, key: &str) -> Result<(), AppError> {
         // Remove synced targets for this tool
         let targets = store.get_all_targets().unwrap_or_default();
         for target in targets.iter().filter(|t| t.tool == key) {
@@ -430,19 +451,17 @@ pub async fn remove_custom_tool(
             store.delete_target(&target.skill_id, &key).ok();
         }
         // Remove from custom_tools list
-        let mut customs = get_custom_tools(&store);
+        let mut customs = get_custom_tools(store);
         customs.retain(|c| c.key != key);
-        set_custom_tools(&store, &customs)?;
+        set_custom_tools(store, &customs)?;
         // Remove any stale override for this key.
-        let mut custom_paths = get_custom_tool_paths(&store);
-        custom_paths.remove(&key);
-        set_custom_tool_paths(&store, &custom_paths)?;
+        let mut custom_paths = get_custom_tool_paths(store);
+        custom_paths.remove(key);
+        set_custom_tool_paths(store, &custom_paths)?;
         // Also remove from disabled_tools if present
-        let mut disabled = get_disabled_tools(&store);
+        let mut disabled = get_disabled_tools(store);
         disabled.retain(|k| k != &key);
-        set_disabled_tools(&store, &disabled)
-    })
-    .await?
+        set_disabled_tools(store, &disabled)
 }
 
 pub fn migrate_legacy_tool_keys(store: &SkillStore) -> Result<(), AppError> {

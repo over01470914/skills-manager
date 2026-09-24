@@ -334,7 +334,11 @@ pub async fn get_managed_skills(
     store: State<'_, Arc<SkillStore>>,
 ) -> Result<Vec<ManagedSkillDto>, AppError> {
     let store = store.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
+    tauri::async_runtime::spawn_blocking(move || list_managed_skills_internal(&store))
+    .await?
+}
+
+pub fn list_managed_skills_internal(store: &SkillStore) -> Result<Vec<ManagedSkillDto>, AppError> {
         let start = Instant::now();
         let skills = store.get_all_skills().map_err(AppError::db)?;
         let all_targets = store.get_all_targets().map_err(AppError::db)?;
@@ -349,8 +353,6 @@ pub async fn get_managed_skills(
             log::info!("get_managed_skills: {count} skills in {elapsed_ms} ms");
         }
         Ok(dtos)
-    })
-    .await?
 }
 
 #[tauri::command]
@@ -359,7 +361,11 @@ pub async fn get_skills_for_preset(
     store: State<'_, Arc<SkillStore>>,
 ) -> Result<Vec<ManagedSkillDto>, AppError> {
     let store = store.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
+    tauri::async_runtime::spawn_blocking(move || list_skills_for_preset_internal(&store, &preset_id))
+    .await?
+}
+
+pub fn list_skills_for_preset_internal(store: &SkillStore, preset_id: &str) -> Result<Vec<ManagedSkillDto>, AppError> {
         let skills = store
             .get_skills_for_scenario(&preset_id)
             .map_err(AppError::db)?;
@@ -370,8 +376,6 @@ pub async fn get_skills_for_preset(
             .into_iter()
             .map(|skill| managed_skill_to_dto(&store, skill, &all_targets, &tags_map))
             .collect())
-    })
-    .await?
 }
 
 #[tauri::command]
@@ -380,7 +384,11 @@ pub async fn get_skill_document(
     store: State<'_, Arc<SkillStore>>,
 ) -> Result<SkillDocumentDto, AppError> {
     let store = store.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
+    tauri::async_runtime::spawn_blocking(move || skill_document_internal(&store, &skill_id))
+    .await?
+}
+
+pub fn skill_document_internal(store: &SkillStore, skill_id: &str) -> Result<SkillDocumentDto, AppError> {
         let skill = store
             .get_skill_by_id(&skill_id)
             .map_err(AppError::db)?
@@ -389,13 +397,11 @@ pub async fn get_skill_document(
         let (filename, content) = read_skill_document_from_dir(Path::new(&skill.central_path))?;
 
         Ok(SkillDocumentDto {
-            skill_id,
+            skill_id: skill_id.to_string(),
             filename,
             content,
             central_path: skill.central_path,
         })
-    })
-    .await?
 }
 
 #[tauri::command]
@@ -1117,7 +1123,6 @@ pub async fn preview_git_install(
     app_handle: tauri::AppHandle,
 ) -> Result<GitPreviewResult, AppError> {
     let store = store.inner().clone();
-    let proxy_url = store.get_setting("proxy_url").ok().flatten();
     let registry = cancel_registry.inner().clone();
     let cancel_key = repo_url.clone();
     let cancel = registry.register(&cancel_key);
@@ -1135,7 +1140,6 @@ pub async fn preview_git_install(
             )
             .ok();
 
-        let parsed = git_fetcher::parse_git_source_resolved(&repo_url, proxy_url.as_deref());
         let app_for_progress = app_handle.clone();
         let url_for_progress = repo_url.clone();
         let progress_cb: git_fetcher::ProgressCallback = Box::new(move |msg: &str| {
@@ -1150,52 +1154,53 @@ pub async fn preview_git_install(
                 )
                 .ok();
         });
-        let temp_dir = git_fetcher::clone_repo_ref_scoped(
-            &parsed.clone_url,
-            parsed.branch.as_deref(),
-            parsed.subpath.as_deref(),
-            Some(&cancel),
-            proxy_url.as_deref(),
-            Some(progress_cb),
-        )
-        .map_err(AppError::classify_git_error)?;
-
-        let build_preview = || -> Result<GitPreviewResult, AppError> {
-            let skill_dir = resolve_skill_dir(&temp_dir, parsed.subpath.as_deref(), None)?;
-            let dirs = collect_git_skill_dirs(&skill_dir);
-
-            let skills: Vec<GitSkillPreview> = dirs
-                .iter()
-                .map(|dir| {
-                    let meta = skill_metadata::parse_skill_md(dir);
-                    let rel_path = skill_rel_key(&skill_dir, dir);
-                    let basename = dir
-                        .file_name()
-                        .map(|n| n.to_string_lossy().to_string())
-                        .unwrap_or_else(|| rel_path.clone());
-                    let name = meta
-                        .name
-                        .filter(|s| !s.trim().is_empty())
-                        .unwrap_or_else(|| basename.clone());
-                    GitSkillPreview {
-                        rel_path,
-                        name,
-                        description: meta.description,
-                    }
-                })
-                .collect();
-
-            Ok(GitPreviewResult {
-                temp_dir: temp_dir.to_string_lossy().to_string(),
-                skills,
-            })
-        };
-
-        build_preview().inspect_err(|_e| {
-            git_fetcher::cleanup_temp(&temp_dir);
-        })
+        preview_git_install_internal(&store, &repo_url, Some(&cancel), Some(progress_cb))
     })
     .await?
+}
+
+pub fn preview_git_install_internal(
+    store: &SkillStore,
+    repo_url: &str,
+    cancel: Option<&Arc<AtomicBool>>,
+    progress: Option<git_fetcher::ProgressCallback>,
+) -> Result<GitPreviewResult, AppError> {
+    let proxy_url = store.get_setting("proxy_url").ok().flatten();
+    let parsed = git_fetcher::parse_git_source_resolved(repo_url, proxy_url.as_deref());
+    let temp_dir = git_fetcher::clone_repo_ref_scoped(
+        &parsed.clone_url,
+        parsed.branch.as_deref(),
+        parsed.subpath.as_deref(),
+        cancel,
+        proxy_url.as_deref(),
+        progress,
+    )
+    .map_err(AppError::classify_git_error)?;
+    let build_preview = || -> Result<GitPreviewResult, AppError> {
+        let skill_dir = resolve_skill_dir(&temp_dir, parsed.subpath.as_deref(), None)?;
+        let dirs = collect_git_skill_dirs(&skill_dir);
+        let skills = dirs
+            .iter()
+            .map(|dir| {
+                let meta = skill_metadata::parse_skill_md(dir);
+                let rel_path = skill_rel_key(&skill_dir, dir);
+                let basename = dir
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_else(|| rel_path.clone());
+                GitSkillPreview {
+                    rel_path,
+                    name: meta.name.filter(|s| !s.trim().is_empty()).unwrap_or(basename),
+                    description: meta.description,
+                }
+            })
+            .collect();
+        Ok(GitPreviewResult {
+            temp_dir: temp_dir.to_string_lossy().to_string(),
+            skills,
+        })
+    };
+    build_preview().inspect_err(|_| git_fetcher::cleanup_temp(&temp_dir))
 }
 
 /// Install selected skills from a previously cloned temp directory.
@@ -1207,16 +1212,24 @@ pub async fn confirm_git_install(
     store: State<'_, Arc<SkillStore>>,
 ) -> Result<(), AppError> {
     let store = store.inner().clone();
-    let proxy_url = store.proxy_url();
-    tauri::async_runtime::spawn_blocking(move || {
-        let temp_path = validate_clone_temp_path(&temp_dir)?;
+    tauri::async_runtime::spawn_blocking(move || confirm_git_install_internal(&store, &repo_url, &temp_dir, &items)).await?
+}
+
+pub fn confirm_git_install_internal(
+    store: &SkillStore,
+    repo_url: &str,
+    temp_dir: &str,
+    items: &[SkillInstallItem],
+) -> Result<(), AppError> {
+        let proxy_url = store.proxy_url();
+        let temp_path = validate_clone_temp_path(temp_dir)?;
 
         let result: Result<(), AppError> = (|| {
             if items.is_empty() {
                 return Ok(());
             }
 
-            let parsed = git_fetcher::parse_git_source_resolved(&repo_url, proxy_url.as_deref());
+            let parsed = git_fetcher::parse_git_source_resolved(repo_url, proxy_url.as_deref());
             let skill_dir = resolve_skill_dir(&temp_path, parsed.subpath.as_deref(), None)?;
             let all_dirs = collect_git_skill_dirs(&skill_dir);
             let revision = git_fetcher::get_head_revision(&temp_path).map_err(AppError::git)?;
@@ -1240,7 +1253,7 @@ pub async fn confirm_git_install(
                 let subpath = git_fetcher::relative_subpath(&temp_path, dir);
                 let metadata = InstallSourceMetadata {
                     source_type: "git".to_string(),
-                    source_ref: Some(repo_url.clone()),
+                    source_ref: Some(repo_url.to_string()),
                     source_ref_resolved: Some(parsed.clone_url.clone()),
                     source_subpath: subpath,
                     source_branch: parsed.branch.clone(),
@@ -1248,7 +1261,7 @@ pub async fn confirm_git_install(
                     remote_revision: Some(revision.clone()),
                     update_status: "up_to_date".to_string(),
                 };
-                store_installed_skill_unlocked(&store, &result, &metadata, None)?;
+                store_installed_skill_unlocked(store, &result, &metadata, None)?;
             }
             Ok(())
         })();
@@ -1256,20 +1269,19 @@ pub async fn confirm_git_install(
         // Always clean up temp directory, regardless of success or failure.
         git_fetcher::cleanup_temp(&temp_path);
         result
-    })
-    .await?
 }
 
 /// Clean up temp directory from a cancelled preview session.
 #[tauri::command]
 pub async fn cancel_git_preview(temp_dir: String) -> Result<(), AppError> {
-    tauri::async_runtime::spawn_blocking(move || {
-        if let Ok(temp_path) = validate_clone_temp_path(&temp_dir) {
-            git_fetcher::cleanup_temp(&temp_path);
-        }
-        Ok(())
-    })
-    .await?
+    tauri::async_runtime::spawn_blocking(move || cancel_git_preview_internal(&temp_dir)).await?
+}
+
+pub fn cancel_git_preview_internal(temp_dir: &str) -> Result<(), AppError> {
+    if let Ok(temp_path) = validate_clone_temp_path(temp_dir) {
+        git_fetcher::cleanup_temp(&temp_path);
+    }
+    Ok(())
 }
 
 #[tauri::command]

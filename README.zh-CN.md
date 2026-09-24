@@ -54,6 +54,9 @@
 
 ## 功能
 
+如需在 Mac mini 或其他机器上以无界面方式运行现有页面，请参阅
+[Web 模式部署说明](WEB_MODE.md)。
+
 <p align="center">
   <img src="assets/diagram-concept-map.png" width="640" alt="概念图：技能库、Preset、全局工作区、项目工作区、Agent" />
 </p>

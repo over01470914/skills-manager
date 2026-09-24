@@ -47,7 +47,9 @@ export function InstallSkills() {
   const { refreshPresets, refreshManagedSkills, managedSkills, openSkillDetailById } = useApp();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
-  const [activeTab, setActiveTab] = useState<"market" | "local" | "git">("market");
+  const [activeTab, setActiveTab] = useState<"market" | "local" | "git">(
+    api.isDesktop ? "market" : "git"
+  );
   const [marketTab, setMarketTab] = useState<"hot" | "trending" | "alltime">("alltime");
   const [marketQuery, setMarketQuery] = useState("");
   const [marketSourceFilter, setMarketSourceFilter] = useState("all");
@@ -178,7 +180,7 @@ export function InstallSkills() {
 
   useEffect(() => {
     const tab = searchParams.get("tab");
-    if (tab === "market" || tab === "local" || tab === "git") {
+    if (tab === "git" || (api.isDesktop && (tab === "market" || tab === "local"))) {
       setActiveTab(tab);
     }
   }, [searchParams]);
@@ -420,7 +422,7 @@ export function InstallSkills() {
     let unlisten: (() => void) | null = null;
 
     try {
-      unlisten = await listen<{ skill_id: string; phase: string; detail?: string }>(
+      if (api.isDesktop) unlisten = await listen<{ skill_id: string; phase: string; detail?: string }>(
         "install-progress",
         (event) => {
           if (event.payload.skill_id !== cancelKey) return;
@@ -472,7 +474,7 @@ export function InstallSkills() {
     let unlisten: (() => void) | null = null;
 
     try {
-      unlisten = await listen<{ skill_id: string; phase: string; detail?: string }>(
+      if (api.isDesktop) unlisten = await listen<{ skill_id: string; phase: string; detail?: string }>(
         "install-progress",
         (event) => {
           if (event.payload.skill_id !== url) return;
@@ -724,7 +726,7 @@ export function InstallSkills() {
             { id: "market" as const, label: t("install.browseMarket"), icon: Box },
             { id: "local" as const, label: t("install.localInstall"), icon: UploadCloud },
             { id: "git" as const, label: t("install.gitInstall"), icon: Github },
-          ].map((tab) => {
+          ].filter((tab) => api.isDesktop || tab.id === "git").map((tab) => {
             const Icon = tab.icon;
             const isActive = activeTab === tab.id;
             return (
@@ -1478,7 +1480,12 @@ export function InstallSkills() {
                 </div>
               )}
               <div className="flex gap-2 pt-2">
-                {gitLoading ? (
+                {gitLoading && !api.isDesktop ? (
+                  <div className="flex w-full items-center justify-center gap-2 px-4 py-2.5 text-[13px] text-muted">
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    {t("install.toast.cloning")}
+                  </div>
+                ) : gitLoading ? (
                   <button
                     onClick={() => gitCancelKey && handleCancelInstall(gitCancelKey)}
                     className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-2.5 text-[13px] font-medium text-red-400 transition-colors hover:bg-red-500/20"

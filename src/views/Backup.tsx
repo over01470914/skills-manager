@@ -227,6 +227,7 @@ export function Backup() {
 
   // Live updates from the background auto-backup rounds.
   useEffect(() => {
+    if (!api.isDesktop) return;
     const unlistenPromise = listen<{ ok: boolean; pending: boolean; error: string | null }>(
       "backup-auto-completed",
       (event) => {
@@ -974,7 +975,7 @@ export function Backup() {
             </section>
           )}
 
-          {(reconnectMode || (!gitStatus?.remote_url && !remoteConfig)) && (
+          {api.isDesktop && (reconnectMode || (!gitStatus?.remote_url && !remoteConfig)) && (
             <section className="app-panel p-4">
               <div className="mb-3 flex items-center gap-2">
                 <Github className="h-4 w-4 text-muted" />
@@ -1225,7 +1226,7 @@ export function Backup() {
             )}
           </section>
 
-          <section className="app-panel p-4">
+          {api.isDesktop && <section className="app-panel p-4">
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
                 <h2 className="text-[14px] font-semibold text-secondary">{t("backup.auto.title")}</h2>
@@ -1239,7 +1240,7 @@ export function Backup() {
                 title={t("backup.auto.title")}
               />
             </div>
-          </section>
+          </section>}
 
           <section className="app-panel p-4">
             <div className="mb-3 flex items-center gap-2">

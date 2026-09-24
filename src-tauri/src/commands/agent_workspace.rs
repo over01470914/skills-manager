@@ -144,20 +144,24 @@ pub async fn get_global_local_skills(
     agent: String,
 ) -> Result<Vec<project_scanner::ProjectSkillInfo>, AppError> {
     let store = store.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let adapter = adapter_for_agent(&store, &agent)?;
-        let skills = read_agent_local_skills(&adapter);
-        let all_managed = store.get_all_skills().map_err(AppError::db)?;
-        let all_targets = store.get_all_targets().map_err(AppError::db)?;
-        let tags_map = store.get_tags_map().unwrap_or_default();
-        Ok(enrich_center_status(
-            skills,
-            &all_managed,
-            &all_targets,
-            &tags_map,
-        ))
-    })
-    .await?
+    tauri::async_runtime::spawn_blocking(move || list_global_local_skills_internal(&store, &agent)).await?
+}
+
+pub fn list_global_local_skills_internal(
+    store: &SkillStore,
+    agent: &str,
+) -> Result<Vec<project_scanner::ProjectSkillInfo>, AppError> {
+    let adapter = adapter_for_agent(store, agent)?;
+    let skills = read_agent_local_skills(&adapter);
+    let all_managed = store.get_all_skills().map_err(AppError::db)?;
+    let all_targets = store.get_all_targets().map_err(AppError::db)?;
+    let tags_map = store.get_tags_map().unwrap_or_default();
+    Ok(enrich_center_status(
+        skills,
+        &all_managed,
+        &all_targets,
+        &tags_map,
+    ))
 }
 
 #[tauri::command]
@@ -168,9 +172,17 @@ pub async fn get_global_local_skill_document(
 ) -> Result<ProjectSkillDocumentDto, AppError> {
     let store = store.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let adapter = adapter_for_agent(&store, &agent)?;
-        ensure_safe_skill_relative_path(&skill_relative_path)?;
+        global_local_skill_document_internal(&store, &agent, &skill_relative_path)
+    }).await?
+}
 
+pub fn global_local_skill_document_internal(
+    store: &SkillStore,
+    agent: &str,
+    skill_relative_path: &str,
+) -> Result<ProjectSkillDocumentDto, AppError> {
+        let adapter = adapter_for_agent(store, agent)?;
+        ensure_safe_skill_relative_path(skill_relative_path)?;
         let skills_root = adapter.skills_dir();
         let skill_dir = skills_root.join(&skill_relative_path);
         ensure_agent_skill_path(&skill_dir, &skills_root)?;
@@ -201,7 +213,7 @@ pub async fn get_global_local_skill_document(
             if file_path.is_file() {
                 let content = std::fs::read_to_string(&file_path)?;
                 return Ok(ProjectSkillDocumentDto {
-                    skill_name: skill_relative_path,
+                    skill_name: skill_relative_path.to_string(),
                     filename: candidate.to_string(),
                     content,
                 });
@@ -211,8 +223,6 @@ pub async fn get_global_local_skill_document(
         Err(AppError::not_found(
             "No document file found in skill directory",
         ))
-    })
-    .await?
 }
 
 #[tauri::command]

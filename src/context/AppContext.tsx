@@ -206,6 +206,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [refreshAppData]);
 
   useEffect(() => {
+    if (!api.isDesktop) return;
     const unlistenPromise = listen("tray-open-updates", () => {
       setDetailSkillId(null);
       if (!window.location.pathname.endsWith("/my-skills")) {
@@ -224,6 +225,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
+    if (!api.isDesktop) return;
     let refreshTimer: ReturnType<typeof setTimeout> | null = null;
 
     const unlistenPromise = listen("app-files-changed", () => {
@@ -310,7 +312,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   // watch set) tears this effect down and clears the pending timer, and marking
   // it done up front would skip the check for the rest of the session.
   useEffect(() => {
-    if (loading || appUpdateCheckedRef.current) return;
+    if (!api.isDesktop || loading || appUpdateCheckedRef.current) return;
     const timer = setTimeout(() => {
       appUpdateCheckedRef.current = true;
       refreshAppUpdate()
@@ -344,7 +346,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   // Check skill updates on startup (non-blocking, silent). When the user has
   // opted in via the Settings toggle, also apply any available updates.
   useEffect(() => {
-    if (loading || managedSkills.length === 0) return;
+    if (!api.isDesktop || loading || managedSkills.length === 0) return;
     const hasGitSkills = managedSkills.some(
       (s) => s.source_type === "git" || s.source_type === "skillssh"
     );
@@ -418,6 +420,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   // Refresh after a background auto-update round (Rust scheduler) or the
   // tray "check for updates" action finishes.
   useEffect(() => {
+    if (!api.isDesktop) return;
     const unlistenPromise = listen("skills-auto-updated", async () => {
       try {
         const skills = await api.getManagedSkills();

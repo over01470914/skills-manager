@@ -60,7 +60,11 @@ fn preset_dto(store: &SkillStore, scenario: ScenarioRecord) -> PresetDto {
 #[tauri::command]
 pub async fn get_presets(store: State<'_, Arc<SkillStore>>) -> Result<Vec<PresetDto>, AppError> {
     let store = store.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
+    tauri::async_runtime::spawn_blocking(move || list_presets_internal(&store))
+    .await?
+}
+
+pub fn list_presets_internal(store: &SkillStore) -> Result<Vec<PresetDto>, AppError> {
         let start = Instant::now();
         let scenarios = store.get_all_scenarios().map_err(AppError::db)?;
         let count = scenarios.len();
@@ -73,8 +77,6 @@ pub async fn get_presets(store: State<'_, Arc<SkillStore>>) -> Result<Vec<Preset
             log::info!("get_presets: {count} presets in {elapsed_ms} ms");
         }
         Ok(result)
-    })
-    .await?
 }
 
 #[tauri::command]
@@ -82,7 +84,11 @@ pub async fn get_active_preset(
     store: State<'_, Arc<SkillStore>>,
 ) -> Result<Option<PresetDto>, AppError> {
     let store = store.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
+    tauri::async_runtime::spawn_blocking(move || active_preset_internal(&store))
+    .await?
+}
+
+pub fn active_preset_internal(store: &SkillStore) -> Result<Option<PresetDto>, AppError> {
         let active_id = store.get_active_scenario_id().map_err(AppError::db)?;
 
         if let Some(id) = active_id {
@@ -92,8 +98,6 @@ pub async fn get_active_preset(
             }
         }
         Ok(None)
-    })
-    .await?
 }
 
 #[tauri::command]
@@ -415,18 +419,20 @@ pub async fn reorder_presets(
     store: State<'_, Arc<SkillStore>>,
 ) -> Result<(), AppError> {
     let store = store.inner().clone();
-    let result = tauri::async_runtime::spawn_blocking(move || {
-        sync_metadata::with_repo_lock("reorder scenarios", || {
-            store.reorder_scenarios(&ids)?;
-            sync_metadata::write_all_from_db_unlocked(&store)
-        })
-        .map_err(AppError::db)
-    })
+    let result = tauri::async_runtime::spawn_blocking(move || reorder_presets_internal(&store, &ids))
     .await?;
     if result.is_ok() {
         refresh_tray_menu_best_effort(&app);
     }
     result
+}
+
+pub fn reorder_presets_internal(store: &SkillStore, ids: &[String]) -> Result<(), AppError> {
+    sync_metadata::with_repo_lock("reorder scenarios", || {
+        store.reorder_scenarios(ids)?;
+        sync_metadata::write_all_from_db_unlocked(store)
+    })
+    .map_err(AppError::db)
 }
 
 #[tauri::command]
@@ -450,14 +456,20 @@ pub async fn reorder_preset_skills(
     store: State<'_, Arc<SkillStore>>,
 ) -> Result<(), AppError> {
     let store = store.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        sync_metadata::with_repo_lock("reorder scenario skills", || {
-            store.reorder_scenario_skills(&preset_id, &skill_ids)?;
-            sync_metadata::write_all_from_db_unlocked(&store)
-        })
-        .map_err(AppError::db)
-    })
+    tauri::async_runtime::spawn_blocking(move || reorder_preset_skills_internal(&store, &preset_id, &skill_ids))
     .await?
+}
+
+pub fn reorder_preset_skills_internal(
+    store: &SkillStore,
+    preset_id: &str,
+    skill_ids: &[String],
+) -> Result<(), AppError> {
+    sync_metadata::with_repo_lock("reorder scenario skills", || {
+        store.reorder_scenario_skills(preset_id, skill_ids)?;
+        sync_metadata::write_all_from_db_unlocked(store)
+    })
+    .map_err(AppError::db)
 }
 
 // ── Internal helpers ──

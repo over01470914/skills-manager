@@ -597,7 +597,11 @@ static GET_PROJECTS_FIRST_CALL: AtomicBool = AtomicBool::new(true);
 #[tauri::command]
 pub async fn get_projects(store: State<'_, Arc<SkillStore>>) -> Result<Vec<ProjectDto>, AppError> {
     let store = store.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
+    tauri::async_runtime::spawn_blocking(move || list_projects_internal(&store))
+    .await?
+}
+
+pub fn list_projects_internal(store: &SkillStore) -> Result<Vec<ProjectDto>, AppError> {
         let start = Instant::now();
         let records = store.get_all_projects().map_err(AppError::db)?;
         let all_managed = store.get_all_skills().map_err(AppError::db)?;
@@ -612,8 +616,6 @@ pub async fn get_projects(store: State<'_, Arc<SkillStore>>) -> Result<Vec<Proje
             log::info!("get_projects: {count} projects in {elapsed_ms} ms");
         }
         Ok(dtos)
-    })
-    .await?
 }
 
 #[tauri::command]

@@ -287,9 +287,13 @@ pub async fn github_device_flow_poll(
 /// must save and display.
 #[tauri::command]
 pub async fn git_backup_sanitize_remote_url(url: String) -> Result<String, AppError> {
-    git_fetcher::validate_git_url(&url).map_err(AppError::git)?;
-    tokio::task::spawn_blocking(move || Ok(sanitize_url_to_keychain(url.trim())))
+    tokio::task::spawn_blocking(move || sanitize_remote_url_internal(&url))
         .await?
+}
+
+pub fn sanitize_remote_url_internal(url: &str) -> Result<String, AppError> {
+    git_fetcher::validate_git_url(url).map_err(AppError::git)?;
+    Ok(sanitize_url_to_keychain(url.trim()))
 }
 
 #[tauri::command]
@@ -319,7 +323,7 @@ pub async fn git_backup_remove_remote(store: State<'_, Arc<SkillStore>>) -> Resu
     tokio::task::spawn_blocking(move || disconnect_local(&store, &skills_dir)).await?
 }
 
-fn disconnect_local(store: &SkillStore, skills_dir: &Path) -> Result<(), AppError> {
+pub fn disconnect_local(store: &SkillStore, skills_dir: &Path) -> Result<(), AppError> {
     // Collect credential hosts before the URLs are gone.
     let mut hosts = std::collections::HashSet::new();
     if let Some(url) = git_backup::raw_remote_url(skills_dir) {
@@ -433,13 +437,17 @@ pub async fn git_backup_sync(
     message: String,
 ) -> Result<SyncOutcome, AppError> {
     let store = store.inner().clone();
-    sync_engine_pref(&store);
+    tokio::task::spawn_blocking(move || git_backup_sync_internal(&store, &message)).await?
+}
+
+pub fn git_backup_sync_internal(
+    store: &SkillStore,
+    message: &str,
+) -> Result<SyncOutcome, AppError> {
+    sync_engine_pref(store);
     let skills_dir = central_repo::skills_dir();
-    tokio::task::spawn_blocking(move || {
-        git_backup::with_repo_lock("git sync", || run_sync_blocking(&store, &skills_dir, &message))
-            .map_err(classify_git_chain)
-    })
-    .await?
+    git_backup::with_repo_lock("git sync", || run_sync_blocking(store, &skills_dir, message))
+        .map_err(classify_git_chain)
 }
 
 const SYNC_PUSH_ATTEMPTS: usize = 3;
@@ -581,20 +589,21 @@ pub async fn git_backup_clone(
     store: State<'_, Arc<SkillStore>>,
     url: String,
 ) -> Result<(), AppError> {
-    git_fetcher::validate_git_url(&url).map_err(AppError::git)?;
     let store = store.inner().clone();
-    sync_engine_pref(&store);
+    tokio::task::spawn_blocking(move || git_backup_clone_internal(&store, &url)).await?
+}
+
+pub fn git_backup_clone_internal(store: &SkillStore, url: &str) -> Result<(), AppError> {
+    git_fetcher::validate_git_url(url).map_err(AppError::git)?;
+    sync_engine_pref(store);
     let skills_dir = central_repo::skills_dir();
-    tokio::task::spawn_blocking(move || {
-        let effective = sanitize_url_to_keychain(url.trim());
-        git_backup::with_repo_lock("git clone", || {
-            git_backup::clone_into_unlocked(&skills_dir, &effective)?;
-            apply_device_identity(&store, &skills_dir);
-            reconcile_skills_index_unlocked(&store)
-        })
-        .map_err(classify_git_chain)
+    let effective = sanitize_url_to_keychain(url.trim());
+    git_backup::with_repo_lock("git clone", || {
+        git_backup::clone_into_unlocked(&skills_dir, &effective)?;
+        apply_device_identity(store, &skills_dir);
+        reconcile_skills_index_unlocked(store)
     })
-    .await?
+    .map_err(classify_git_chain)
 }
 
 /// Recovery: discard the local `.git` and re-clone from the configured remote.
@@ -605,20 +614,21 @@ pub async fn git_backup_reclone(
     store: State<'_, Arc<SkillStore>>,
     url: String,
 ) -> Result<(), AppError> {
-    git_fetcher::validate_git_url(&url).map_err(AppError::git)?;
     let store = store.inner().clone();
-    sync_engine_pref(&store);
+    tokio::task::spawn_blocking(move || git_backup_reclone_internal(&store, &url)).await?
+}
+
+pub fn git_backup_reclone_internal(store: &SkillStore, url: &str) -> Result<(), AppError> {
+    git_fetcher::validate_git_url(url).map_err(AppError::git)?;
+    sync_engine_pref(store);
     let skills_dir = central_repo::skills_dir();
-    tokio::task::spawn_blocking(move || {
-        let effective = sanitize_url_to_keychain(url.trim());
-        git_backup::with_repo_lock("git reclone", || {
-            git_backup::reclone_from_remote_unlocked(&skills_dir, &effective)?;
-            apply_device_identity(&store, &skills_dir);
-            reconcile_skills_index_unlocked(&store)
-        })
-        .map_err(classify_git_chain)
+    let effective = sanitize_url_to_keychain(url.trim());
+    git_backup::with_repo_lock("git reclone", || {
+        git_backup::reclone_from_remote_unlocked(&skills_dir, &effective)?;
+        apply_device_identity(store, &skills_dir);
+        reconcile_skills_index_unlocked(store)
     })
-    .await?
+    .map_err(classify_git_chain)
 }
 
 #[tauri::command]

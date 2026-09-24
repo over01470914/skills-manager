@@ -1,4 +1,24 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke as tauriInvoke } from "@tauri-apps/api/core";
+
+export const isDesktop = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+
+export async function webInvoke<T>(name: string, args?: Record<string, unknown>): Promise<T> {
+  const token = sessionStorage.getItem("skills-manager:web-token");
+  const response = await fetch("/api/invoke", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify({ name, args }),
+  });
+  const result = await response.json();
+  if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
+  return result as T;
+}
+
+const invoke = <T>(name: string, args?: Record<string, unknown>): Promise<T> =>
+  isDesktop ? tauriInvoke<T>(name, args) : webInvoke<T>(name, args);
 
 // ── Types ──
 

@@ -58,6 +58,9 @@
 
 ## Features
 
+For headless hosting of the existing interface on a Mac mini or another machine,
+see [Web mode](WEB_MODE.md).
+
 <p align="center">
   <img src="assets/diagram-concept-map.png" width="640" alt="Concept map: Library, Preset, Global Workspace, Project Workspace, Agent" />
 </p>

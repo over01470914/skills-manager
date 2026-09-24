@@ -445,6 +445,7 @@ export function Settings() {
   // first and then emits with the same `ran_at`, so reading from the payload
   // avoids a follow-up DB roundtrip.
   useEffect(() => {
+    if (!api.isDesktop) return;
     type AutoUpdatedPayload = { ran_at?: string };
     const unlistenPromise = listen<AutoUpdatedPayload>("skills-auto-updated", (event) => {
       const ranAt = event.payload?.ran_at;
@@ -517,7 +518,8 @@ export function Settings() {
   const handleOpenGithub = async () => {
     try {
       setOpeningGithub(true);
-      await openUrl(GITHUB_URL);
+      if (api.isDesktop) await openUrl(GITHUB_URL);
+      else window.open(GITHUB_URL, "_blank", "noopener,noreferrer");
     } catch (error) {
       console.error("Failed to open GitHub repository", error);
       toast.error(t("common.error"));
@@ -925,13 +927,13 @@ export function Settings() {
                 if (e.key === "Escape") setEditingPathKey(null);
               }}
             />
-            <button
+            {api.isDesktop && <button
               onClick={() => handleBrowsePath(setEditingPathValue)}
               className="shrink-0 p-1 text-muted hover:text-accent outline-none"
               title={t("settings.selectFolder")}
             >
               <FolderOpen className="h-3 w-3" />
-            </button>
+            </button>}
             <button
               onClick={handleSavePath}
               className="shrink-0 p-1 text-emerald-500 hover:text-emerald-400 outline-none"
@@ -1133,13 +1135,13 @@ export function Settings() {
                     placeholder={t("settings.skillsPathPlaceholder")}
                     className={`${fieldClass} min-w-0 flex-1 font-mono`}
                   />
-                  <button
+                  {api.isDesktop && <button
                     onClick={() => handleBrowsePath(setCustomPath)}
                     className={`${actionButtonClass} bg-surface-hover hover:bg-surface-active text-tertiary border-border`}
                   >
                     <FolderOpen className="w-3 h-3" />
                     {t("settings.selectFolder")}
-                  </button>
+                  </button>}
                 </div>
               </div>
               <div>
@@ -1256,7 +1258,7 @@ export function Settings() {
                         }
                       }}
                     />
-                    <button
+                    {api.isDesktop && <button
                       type="button"
                       onClick={() => handleBrowsePath(setCentralRepoPathInput)}
                       disabled={savingCentralRepoPath}
@@ -1264,7 +1266,7 @@ export function Settings() {
                     >
                       <FolderOpen className="w-3 h-3" />
                       {t("settings.selectFolder")}
-                    </button>
+                    </button>}
                     <button
                       type="button"
                       onClick={() => void handleSaveCentralRepoPath()}
@@ -1321,7 +1323,7 @@ export function Settings() {
                     {t("settings.resetPath")}
                   </button>
                 )}
-                <button
+                {api.isDesktop && <button
                   type="button"
                   onClick={handleOpenRepoInFinder}
                   disabled={openingRepo}
@@ -1338,7 +1340,7 @@ export function Settings() {
                     <ExternalLink className="w-3 h-3" />
                   )}
                   {t("settings.openInFinder")}
-                </button>
+                </button>}
               </div>
               <div className="w-full text-[12px] text-muted">
                 {centralRepoPathOverride
@@ -1459,7 +1461,7 @@ export function Settings() {
             </div>
 
             {/* Close action */}
-            <div className="flex flex-wrap items-start justify-between gap-3 px-5 py-4">
+            {api.isDesktop && <div className="flex flex-wrap items-start justify-between gap-3 px-5 py-4">
               <div className="min-w-0 flex-1">
                 <h3 className="text-[14px] font-semibold text-primary">{t("settings.closeAction")}</h3>
                 <p className="mt-0.5 text-[12px] text-muted">{t("settings.closeActionDesc")}</p>
@@ -1483,10 +1485,10 @@ export function Settings() {
                   </button>
                 ))}
               </div>
-            </div>
+            </div>}
 
             {/* Tray icon */}
-            <div className="flex flex-wrap items-start justify-between gap-3 px-5 py-4">
+            {api.isDesktop && <div className="flex flex-wrap items-start justify-between gap-3 px-5 py-4">
               <div className="min-w-0 flex-1">
                 <h3 className="text-[14px] font-semibold text-primary">{t("settings.trayIcon")}</h3>
                 <p className="mt-0.5 text-[12px] text-muted">{t("settings.trayIconDesc")}</p>
@@ -1497,7 +1499,7 @@ export function Settings() {
                 onChange={() => handleShowTrayIconChange(!showTrayIcon)}
                 title={showTrayIcon ? t("settings.trayIcon_on") : t("settings.trayIcon_off")}
               />
-            </div>
+            </div>}
           </div>
         </section>
 
@@ -1536,7 +1538,7 @@ export function Settings() {
         </section>
 
         {/* Skill auto-update */}
-        <section>
+        {api.isDesktop && <section>
           <h2 className="app-section-title mb-3">
             {t("settings.autoUpdate.title")}
           </h2>
@@ -1603,7 +1605,7 @@ export function Settings() {
               </div>
             </div>
           </div>
-        </section>
+        </section>}
 
         {/* Git sync config */}
         <section>
@@ -1766,7 +1768,7 @@ export function Settings() {
               </div>
             </div>
             <div className="flex flex-wrap gap-2">
-              {appUpdate?.has_update ? (
+              {api.isDesktop && (appUpdate?.has_update ? (
                 CAN_INSTALL_IN_APP ? (
                   <>
                     <button
@@ -1813,7 +1815,7 @@ export function Settings() {
                   )}
                   {checkingUpdate ? t("settings.checking") : t("settings.checkUpdate")}
                 </button>
-              )}
+              ))}
               <button
                 type="button"
                 onClick={openHelp}
@@ -1821,7 +1823,7 @@ export function Settings() {
               >
                 <BookOpen className="w-3 h-3" /> {t("settings.help")}
               </button>
-              <button
+              {api.isDesktop && <button
                 type="button"
                 onClick={handleReportIssue}
                 disabled={reportingIssue}
@@ -1834,8 +1836,8 @@ export function Settings() {
                   <Bug className="w-3 h-3" />
                 )}
                 {t("settings.reportIssue")}
-              </button>
-              <button
+              </button>}
+              {api.isDesktop && <button
                 type="button"
                 onClick={handleExportLogs}
                 disabled={exportingLogs}
@@ -1848,10 +1850,13 @@ export function Settings() {
                   <FileArchive className="w-3 h-3" />
                 )}
                 {t("settings.exportLogs")}
-              </button>
+              </button>}
               <button
                 type="button"
-                onClick={() => { openUrl(WEBSITE_URL).catch(() => {}); }}
+                onClick={() => {
+                  if (api.isDesktop) openUrl(WEBSITE_URL).catch(() => {});
+                  else window.open(WEBSITE_URL, "_blank", "noopener,noreferrer");
+                }}
                 className={`${actionButtonClass} bg-surface-hover hover:bg-surface-active text-tertiary border-border`}
               >
                 <Globe className="w-3 h-3" /> {t("settings.website")}
