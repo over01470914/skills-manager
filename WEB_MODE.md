@@ -15,7 +15,9 @@ cargo build --release --bin skills-manager-web --bin skills-manager-cli
 
 Keep `dist/` in the repository and both binaries in the same `target/release`
 directory. Alternatively set `SM_WEB_DIST` and `SM_CLI_PATH` to their absolute
-paths.
+paths. On startup, Web mode publishes that CLI to `~/.skills-manager/bin` so
+deployed bundle entry skills can invoke the same commands. If publishing fails,
+the server reports the error instead of serving a bundle that agents cannot run.
 
 ## Run locally
 

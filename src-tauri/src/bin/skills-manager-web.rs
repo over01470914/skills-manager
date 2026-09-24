@@ -6,7 +6,7 @@ use std::{net::IpAddr, path::PathBuf, process::Command, sync::Arc};
 use anyhow::{anyhow, bail, Context, Result};
 use app_lib::{
     commands::{agent_workspace, git_backup as git_commands, presets, projects, skills, tools},
-    core::{app_state, bundle, central_repo, git_backup, skill_store::SkillStore, tool_service},
+    core::{app_state, bundle, central_repo, cli_bridge, git_backup, skill_store::SkillStore, tool_service},
 };
 use axum::{
     extract::{DefaultBodyLimit, State},
@@ -538,6 +538,8 @@ async fn main() -> Result<()> {
             cli.display()
         );
     }
+    cli_bridge::publish_web_bridge(&cli, env!("CARGO_PKG_VERSION"))
+        .context("could not publish the CLI used by deployed bundle skills")?;
     let dist = std::env::var_os("SM_WEB_DIST")
         .map(PathBuf::from)
         .unwrap_or_else(|| {

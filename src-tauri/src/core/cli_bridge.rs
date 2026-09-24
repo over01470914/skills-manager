@@ -199,6 +199,21 @@ fn ensure_bridge_inner(app_version: &str) -> Result<PathBuf> {
     publish_from(&bundled_cli()?, app_version)
 }
 
+/// Web mode has an explicit CLI path and may be run beside an older desktop
+/// install with the same package version. Always publish its own CLI so bundle
+/// entry skills invoke the commands served by this web process.
+pub fn publish_web_bridge(source: &Path, app_version: &str) -> Result<PathBuf> {
+    verify(source, app_version)?;
+    let target = bridge_path();
+    if read_stamp().as_deref() == Some(app_version)
+        && target.is_file()
+        && std::fs::read(source)? == std::fs::read(&target)?
+    {
+        return Ok(target);
+    }
+    publish_from(source, app_version)
+}
+
 fn publish_from(source: &Path, app_version: &str) -> Result<PathBuf> {
     let target = bridge_path();
 

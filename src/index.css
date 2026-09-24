@@ -85,6 +85,11 @@
     scrollbar-width: none;
   }
 
+  .bundle-skill-picker {
+    scrollbar-color: var(--color-border) var(--color-surface);
+    scrollbar-width: thin;
+  }
+
   .app-page {
     @apply mx-auto flex min-h-full w-full max-w-[1200px] flex-col gap-6 pb-8;
   }
