@@ -4,6 +4,7 @@ import { Link, useLocation, useNavigate } from "react-router-dom";
 import {
   LayoutDashboard,
   Layers,
+  Workflow,
   Globe,
   Download,
   CloudUpload,
@@ -167,6 +168,7 @@ export function Sidebar() {
   const NAV_ITEMS = [
     { name: t("sidebar.dashboard"), path: "/", icon: LayoutDashboard },
     { name: t("sidebar.mySkills"), path: "/my-skills", icon: Layers },
+    { name: t("sidebar.bundles"), path: "/bundles", icon: Workflow },
     { name: t("sidebar.installSkills"), path: "/install", icon: Download },
     { name: t("sidebar.backup"), path: "/backup", icon: CloudUpload },
   ];

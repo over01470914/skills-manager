@@ -136,6 +136,21 @@ fn cli_command(path: &Path) -> Command {
     cmd
 }
 
+/// Run a fixed app command through the CLI bundled with this exact desktop build.
+pub fn run_bundled_json(args: &[String]) -> Result<serde_json::Value> {
+    let output = cli_command(&bundled_cli()?)
+        .arg("--json")
+        .args(args)
+        .output()
+        .context("could not run bundled skills-manager-cli")?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!("{}", if stderr.trim().is_empty() { stdout.trim() } else { stderr.trim() });
+    }
+    serde_json::from_str(stdout.trim()).context("bundled CLI returned invalid JSON")
+}
+
 /// Run the freshly copied binary. A copy that cannot report its own version is
 /// truncated, blocked, or built for another architecture — publishing it would
 /// hand agents a binary that fails on first use.

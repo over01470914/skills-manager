@@ -51,6 +51,28 @@ export interface SkillTarget {
   synced_at: number | null;
 }
 
+export interface BundleStage {
+  id: string;
+  skills: string[];
+  after: string[];
+  when: string | null;
+}
+
+export interface BundleManifest {
+  schema_version: 1;
+  slug: string;
+  description: string;
+  instructions: string;
+  stages: BundleStage[];
+}
+
+export const listBundles = () => invoke<BundleManifest[]>("list_bundles");
+export const saveBundle = (manifest: BundleManifest, originalSlug?: string) =>
+  invoke<BundleManifest>("save_bundle", { manifest, originalSlug: originalSlug ?? null });
+export const deleteBundle = (slug: string) => invoke<void>("delete_bundle", { slug });
+export const deployBundle = (slug: string, agent: "codex" | "hermes", dryRun = false, undeploy = false) =>
+  invoke<unknown>("deploy_bundle", { slug, agent, dryRun, undeploy });
+
 export interface SkillToolToggle {
   tool: string;
   display_name: string;

@@ -55,6 +55,13 @@ enum BundleCommand {
     Import {
         path: PathBuf,
     },
+    Update {
+        slug: String,
+        path: PathBuf,
+    },
+    Delete {
+        slug: String,
+    },
     Resolve {
         slug: String,
         #[arg(long)]
@@ -847,6 +854,15 @@ fn bundle_entry_content(manifest: &bundle::BundleManifest) -> anyhow::Result<Str
     ))
 }
 
+fn bundle_entry_matches(
+    skill: &app_lib::core::skill_store::SkillRecord,
+    manifest: &bundle::BundleManifest,
+) -> anyhow::Result<bool> {
+    Ok(skill.source_type == "local"
+        && skill.name == manifest.slug
+        && std::fs::read_to_string(bundle_skill_file(skill)?)? == bundle_entry_content(manifest)?)
+}
+
 fn validate_bundle_agent_targets(
     store: &SkillStore,
     slug: &str,
@@ -896,6 +912,9 @@ fn validate_bundle_skills(
         for reference in &stage.skills {
             let skill = resolve_skill(store, reference)
                 .with_context(|| format!("bundle {} stage {}", manifest.slug, stage.id))?;
+            if bundle::valid_slug(&skill.name) && bundle_path(&skill.name)?.exists() {
+                bail!("nested bundle dependencies are not supported: {}", skill.name);
+            }
             bundle_skill_file(&skill)?;
             seen.insert(skill.id);
         }
@@ -980,6 +999,49 @@ fn run_bundles(args: BundleArgs, store: &SkillStore, json: bool) -> anyhow::Resu
                 .with_context(|| format!("bundle already exists: {}", manifest.slug))?;
             print_json(&manifest, json);
         }
+        BundleCommand::Update { slug, path } => {
+            let destination = bundle_path(&slug)?;
+            let old_manifest = bundle::read_manifest(&destination)?;
+            let mut manifest = bundle::read_manifest(&path)?;
+            if manifest.slug != slug {
+                bail!("bundle slug cannot be changed during update");
+            }
+            validate_bundle_skills(&manifest, store)?;
+            ensure_bundle_not_deployed(store, &slug)?;
+            let entry = bundle_entry_source(&slug).join("SKILL.md");
+            if entry.exists() && std::fs::read_to_string(&entry)? != bundle_entry_content(&old_manifest)? {
+                bail!("generated bundle entry was modified: {}", entry.display());
+            }
+            for stage in &mut manifest.stages {
+                for reference in &mut stage.skills {
+                    *reference = resolve_skill(store, reference)?.id;
+                }
+            }
+            let temp = tempfile::NamedTempFile::new_in(bundle_dir())?;
+            std::fs::write(temp.path(), serde_yaml::to_string(&manifest)?)?;
+            if let Some(skill) = store.get_all_skills()?.into_iter().find(|skill| skill.name == slug) {
+                let result = cmd::delete_managed_skills_by_ids(store, &[skill.id]).map_err(map_app_err)?;
+                if !result.failed.is_empty() { bail!("could not remove old generated bundle entry skill"); }
+            }
+            temp.persist(&destination).map_err(|error| error.error)?;
+            if entry.exists() {
+                std::fs::write(entry, bundle_entry_content(&manifest)?)?;
+            }
+            print_json(&manifest, json);
+        }
+        BundleCommand::Delete { slug } => {
+            let path = bundle_path(&slug)?;
+            bundle::read_manifest(&path)?;
+            ensure_bundle_not_deployed(store, &slug)?;
+            if let Some(skill) = store.get_all_skills()?.into_iter().find(|skill| skill.name == slug) {
+                let result = cmd::delete_managed_skills_by_ids(store, &[skill.id]).map_err(map_app_err)?;
+                if !result.failed.is_empty() { bail!("could not remove generated bundle entry skill"); }
+            }
+            std::fs::remove_file(path)?;
+            let source = bundle_entry_source(&slug);
+            if source.exists() { std::fs::remove_dir_all(source)?; }
+            print_json(&serde_json::json!({"slug": slug, "deleted": true}), json);
+        }
         BundleCommand::Resolve {
             slug,
             stage,
@@ -1044,9 +1106,7 @@ fn run_bundles(args: BundleArgs, store: &SkillStore, json: bool) -> anyhow::Resu
                 .into_iter()
                 .find(|skill| skill.name == slug);
             if let Some(entry) = existing {
-                let source_matches = entry.source_type == "local"
-                    && entry.source_ref.as_deref() == Some(entry_source.to_string_lossy().as_ref());
-                if !source_matches {
+                if !bundle_entry_matches(&entry, &manifest)? {
                     bail!("bundle slug collides with an unrelated library skill: {slug}");
                 }
                 print_json(
@@ -1100,16 +1160,27 @@ fn run_bundles(args: BundleArgs, store: &SkillStore, json: bool) -> anyhow::Resu
         } => {
             bundle::read_manifest(&bundle_path(&slug)?)?;
             let entry = resolve_skill(store, &slug)?;
-            if entry.source_type != "local"
-                || entry.source_ref.as_deref()
-                    != Some(bundle_entry_source(&slug).to_string_lossy().as_ref())
-            {
+            let manifest = bundle::read_manifest(&bundle_path(&slug)?)?;
+            if !bundle_entry_matches(&entry, &manifest)? {
                 bail!("bundle slug collides with an unrelated library skill: {slug}");
             }
             print_json(
                 &run_skill_deployment(store, &[slug], &agents, false, dry_run)?,
                 json,
             );
+        }
+    }
+    Ok(())
+}
+
+fn ensure_bundle_not_deployed(store: &SkillStore, slug: &str) -> anyhow::Result<()> {
+    let manifest = bundle::read_manifest(&bundle_path(slug)?)?;
+    if let Some(entry) = store.get_all_skills()?.into_iter().find(|skill| skill.name == slug) {
+        if !bundle_entry_matches(&entry, &manifest)? {
+            bail!("bundle slug collides with an unrelated library skill: {slug}");
+        }
+        if store.get_all_targets()?.into_iter().any(|target| target.skill_id == entry.id) {
+            bail!("undeploy bundle from all agents before editing or deleting it: {slug}");
         }
     }
     Ok(())

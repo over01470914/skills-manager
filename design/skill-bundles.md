@@ -38,6 +38,8 @@ stages:
 - `bundles list` and `bundles show <slug>` inspect definitions.
 - `bundles validate <manifest>` checks structure and library references without changing state.
 - `bundles import <manifest>` saves a manifest and resolves skill names to stable library IDs.
+- `bundles update <slug> <manifest>` replaces a validated definition while preserving its slug. Deployed entries must be undeployed first.
+- `bundles delete <slug>` removes a definition and its generated entry after undeployment.
 - `bundles resolve <slug> --stage <id> [--completed build] [--fact page-available=true] --json` returns that stage's instructions and canonical SKILL.md paths. It reads neither prior nor future skill bodies.
 - `bundles export-entry <slug> --dest <directory>` creates a small ordinary entry skill for inspection or manual installation.
 - `bundles deploy <slug> --agent codex|hermes [--dry-run]` installs that entry as a managed library skill and deploys it through the existing conflict-protected flow. `bundles undeploy` removes only its managed Agent copy.
@@ -59,3 +61,7 @@ The entry skill tells the agent to call `resolve` at each stage and read only re
 2. CLI commands and generated entry skill for Codex and Hermes, using existing skill deployment for the entry.
 3. Conversation-level acceptance on both agents.
 4. Desktop UI editor and Git backup serialization after the runtime behavior is verified.
+
+## Desktop web UI
+
+The Bundles page lists definitions, stages, skill references and deployment state. Its form creates and edits a manifest, including stage prerequisites and Boolean fact names. The page previews deployment before changing either Codex or Hermes and uses the same CLI validation and deployment code as the command line. A deployed bundle must be undeployed from every agent before editing or deleting it; this keeps the generated entry skill in sync with its manifest.

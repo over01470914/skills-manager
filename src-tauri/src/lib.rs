@@ -991,6 +991,10 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            commands::bundles::list_bundles,
+            commands::bundles::save_bundle,
+            commands::bundles::delete_bundle,
+            commands::bundles::deploy_bundle,
             // Tools
             commands::tools::get_tool_status,
             commands::tools::set_tool_enabled,
