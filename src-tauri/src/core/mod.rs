@@ -1,6 +1,7 @@
 pub mod app_state;
 pub mod audit_log;
 pub mod auto_backup;
+pub mod bundle;
 pub mod central_repo;
 pub mod cli_bridge;
 pub mod content_hash;

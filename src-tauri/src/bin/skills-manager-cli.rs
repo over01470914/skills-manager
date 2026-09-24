@@ -1,12 +1,13 @@
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
-use anyhow::{Context, anyhow, bail};
+use anyhow::{anyhow, bail, Context};
 use app_lib::commands::{presets as preset_cmd, skills as cmd, tools as tool_cmd};
 use app_lib::core::{
-    app_state, audit_log::AuditDraft, central_repo, error::AppError, git_backup, git_fetcher,
-    installer, merge, repo_lock::RepoLock, scenario_service, skill_metadata,
+    app_state, audit_log::AuditDraft, bundle, central_repo, error::AppError, git_backup,
+    git_fetcher, installer, merge, repo_lock::RepoLock, scenario_service, skill_metadata,
     skill_store::SkillStore, skillssh_api, sync_engine, sync_metadata, tool_adapters, tool_service,
 };
 use clap::{Args, Parser, Subcommand};
@@ -32,7 +33,56 @@ enum Commands {
     Skills(SkillsArgs),
     #[command(alias = "scenarios")]
     Presets(PresetArgs),
+    Bundles(BundleArgs),
     Git(GitArgs),
+}
+
+#[derive(Args, Debug)]
+struct BundleArgs {
+    #[command(subcommand)]
+    command: BundleCommand,
+}
+
+#[derive(Subcommand, Debug)]
+enum BundleCommand {
+    List,
+    Show {
+        slug: String,
+    },
+    Validate {
+        path: PathBuf,
+    },
+    Import {
+        path: PathBuf,
+    },
+    Resolve {
+        slug: String,
+        #[arg(long)]
+        stage: String,
+        #[arg(long = "completed")]
+        completed: Vec<String>,
+        #[arg(long = "fact", value_name = "NAME=true|false")]
+        facts: Vec<String>,
+    },
+    ExportEntry {
+        slug: String,
+        #[arg(long)]
+        dest: PathBuf,
+    },
+    Deploy {
+        slug: String,
+        #[arg(long = "agent", required = true)]
+        agents: Vec<String>,
+        #[arg(long)]
+        dry_run: bool,
+    },
+    Undeploy {
+        slug: String,
+        #[arg(long = "agent", required = true)]
+        agents: Vec<String>,
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 #[derive(Args, Debug)]
@@ -700,6 +750,7 @@ fn run(cli: Cli) -> anyhow::Result<()> {
         Commands::Tools(args) => run_tools(args, &store, cli.json),
         Commands::Skills(args) => run_skills(args, &store, cli.json),
         Commands::Presets(args) => run_presets(args, &store, cli.json),
+        Commands::Bundles(args) => run_bundles(args, &store, cli.json),
         Commands::Git(args) => run_git(args, &store, cli.skills_root.is_some(), cli.json),
     }
 }
@@ -733,6 +784,335 @@ fn repo_status(store: &SkillStore) -> RepoStatus {
         preset_count: store.get_all_scenarios().unwrap_or_default().len(),
         active_preset_id: store.get_active_scenario_id().unwrap_or(None),
     }
+}
+
+#[derive(Serialize)]
+struct BundleValidationReport {
+    slug: String,
+    stage_count: usize,
+    skill_count: usize,
+}
+
+#[derive(Serialize)]
+struct ResolvedBundleSkill {
+    id: String,
+    name: String,
+    skill_md: String,
+}
+
+#[derive(Serialize)]
+struct BundleResolveReport {
+    slug: String,
+    stage: String,
+    instructions: String,
+    skills: Vec<ResolvedBundleSkill>,
+}
+
+#[derive(Serialize)]
+struct BundleDeployPreview {
+    slug: String,
+    dry_run: bool,
+    install_entry: bool,
+    target_paths: Vec<String>,
+}
+
+fn bundle_dir() -> PathBuf {
+    sync_metadata::metadata_dir().join("bundles")
+}
+
+fn bundle_path(slug: &str) -> anyhow::Result<PathBuf> {
+    if !bundle::valid_slug(slug) {
+        bail!("invalid bundle slug: {slug}");
+    }
+    Ok(bundle_dir().join(format!("{slug}.yaml")))
+}
+
+fn bundle_skill_file(skill: &app_lib::core::skill_store::SkillRecord) -> anyhow::Result<PathBuf> {
+    ["SKILL.md", "skill.md"]
+        .into_iter()
+        .map(|name| Path::new(&skill.central_path).join(name))
+        .find(|path| path.is_file())
+        .ok_or_else(|| anyhow!("bundle skill has no SKILL.md: {}", skill.name))
+}
+
+fn bundle_entry_source(slug: &str) -> PathBuf {
+    bundle_dir().join("entries").join(slug)
+}
+
+fn bundle_entry_content(manifest: &bundle::BundleManifest) -> anyhow::Result<String> {
+    let description = serde_json::to_string(&manifest.description)?;
+    Ok(format!(
+        "---\nname: {}\ndescription: {}\n---\n\nUse this bundle when explicitly invoked. Its stages are defined by Skills Manager.\n\n1. Locate the app-published `skills-manager-cli` in `~/.skills-manager/bin` (`skills-manager-cli.exe` on Windows).\n2. Run `bundles show {} --json` to inspect stage order and conditions.\n3. Before each stage, run `bundles resolve {} --stage <stage-id> --json`, adding `--completed <stage-id>` for completed predecessors and `--fact <name>=true` only for verified facts.\n4. Read only the `skill_md` paths returned for that stage, then follow those instructions and the bundle's `instructions`.\n5. Do not load later stages early. If resolution fails, explain the missing prerequisite instead of guessing.\n",
+        manifest.slug, description, manifest.slug, manifest.slug
+    ))
+}
+
+fn validate_bundle_agent_targets(
+    store: &SkillStore,
+    slug: &str,
+    agents: &[String],
+) -> anyhow::Result<Vec<String>> {
+    let infos = tool_service::list_tool_info(store);
+    let mut paths = Vec::new();
+    for key in agents {
+        if key != "codex" && key != "hermes" {
+            bail!("bundle entry deployment currently supports codex and hermes: {key}");
+        }
+        let agent = infos
+            .iter()
+            .find(|agent| agent.key == *key)
+            .with_context(|| format!("unknown agent: {key}"))?;
+        if !agent.installed || !agent.enabled {
+            bail!("agent is not installed and enabled: {key}");
+        }
+        if key == "hermes" {
+            let bundle_root = Path::new(&agent.skills_dir)
+                .parent()
+                .context("Hermes skills directory has no parent")?
+                .join("skill-bundles");
+            if ["yaml", "yml"]
+                .into_iter()
+                .any(|extension| bundle_root.join(format!("{slug}.{extension}")).exists())
+            {
+                bail!("Hermes native bundle already uses the slug: {slug}");
+            }
+        }
+        paths.push(
+            Path::new(&agent.skills_dir)
+                .join(slug)
+                .to_string_lossy()
+                .to_string(),
+        );
+    }
+    Ok(paths)
+}
+
+fn validate_bundle_skills(
+    manifest: &bundle::BundleManifest,
+    store: &SkillStore,
+) -> anyhow::Result<BundleValidationReport> {
+    let mut seen = HashSet::new();
+    for stage in &manifest.stages {
+        for reference in &stage.skills {
+            let skill = resolve_skill(store, reference)
+                .with_context(|| format!("bundle {} stage {}", manifest.slug, stage.id))?;
+            bundle_skill_file(&skill)?;
+            seen.insert(skill.id);
+        }
+    }
+    Ok(BundleValidationReport {
+        slug: manifest.slug.clone(),
+        stage_count: manifest.stages.len(),
+        skill_count: seen.len(),
+    })
+}
+
+fn parse_bundle_facts(raw: &[String]) -> anyhow::Result<HashMap<String, bool>> {
+    let mut facts = HashMap::new();
+    for item in raw {
+        let (key, value) = item
+            .split_once('=')
+            .ok_or_else(|| anyhow!("fact must be NAME=true or NAME=false: {item}"))?;
+        if !bundle::valid_slug(key) {
+            bail!("invalid fact name: {key}");
+        }
+        let value = match value {
+            "true" => true,
+            "false" => false,
+            _ => bail!("fact must be true or false: {item}"),
+        };
+        if facts.insert(key.to_string(), value).is_some() {
+            bail!("duplicate fact: {key}");
+        }
+    }
+    Ok(facts)
+}
+
+fn run_bundles(args: BundleArgs, store: &SkillStore, json: bool) -> anyhow::Result<()> {
+    match args.command {
+        BundleCommand::List => {
+            let mut manifests = Vec::new();
+            if bundle_dir().exists() {
+                for entry in std::fs::read_dir(bundle_dir())? {
+                    let path = entry?.path();
+                    if path.extension().and_then(|extension| extension.to_str()) == Some("yaml") {
+                        manifests.push(bundle::read_manifest(&path)?);
+                    }
+                }
+            }
+            manifests.sort_by(|a, b| a.slug.cmp(&b.slug));
+            print_json(&manifests, json);
+        }
+        BundleCommand::Show { slug } => {
+            print_json(&bundle::read_manifest(&bundle_path(&slug)?)?, json);
+        }
+        BundleCommand::Validate { path } => {
+            let manifest = bundle::read_manifest(&path)?;
+            print_json(&validate_bundle_skills(&manifest, store)?, json);
+        }
+        BundleCommand::Import { path } => {
+            let mut manifest = bundle::read_manifest(&path)?;
+            validate_bundle_skills(&manifest, store)?;
+            if store.get_all_skills()?.iter().any(|skill| {
+                skill.name == manifest.slug
+                    || Path::new(&skill.central_path)
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        == Some(manifest.slug.as_str())
+            }) {
+                bail!(
+                    "bundle slug collides with an existing skill: {}",
+                    manifest.slug
+                );
+            }
+            for stage in &mut manifest.stages {
+                for reference in &mut stage.skills {
+                    *reference = resolve_skill(store, reference)?.id;
+                }
+            }
+            let destination = bundle_path(&manifest.slug)?;
+            std::fs::create_dir_all(bundle_dir())?;
+            let mut temp = tempfile::NamedTempFile::new_in(bundle_dir())?;
+            use std::io::Write;
+            temp.write_all(serde_yaml::to_string(&manifest)?.as_bytes())?;
+            temp.persist_noclobber(&destination)
+                .map_err(|error| error.error)
+                .with_context(|| format!("bundle already exists: {}", manifest.slug))?;
+            print_json(&manifest, json);
+        }
+        BundleCommand::Resolve {
+            slug,
+            stage,
+            completed,
+            facts,
+        } => {
+            let manifest = bundle::read_manifest(&bundle_path(&slug)?)?;
+            let completed: HashSet<_> = completed.into_iter().collect();
+            let facts = parse_bundle_facts(&facts)?;
+            let ready = bundle::ready_stage(&manifest, &stage, &completed, &facts)?;
+            let skills_root = std::fs::canonicalize(central_repo::skills_dir())?;
+            let mut skills = Vec::new();
+            for reference in &ready.skills {
+                let skill = resolve_skill(store, reference)?;
+                let skill_md = std::fs::canonicalize(bundle_skill_file(&skill)?)?;
+                if !skill_md.starts_with(&skills_root) {
+                    bail!(
+                        "bundle skill is outside the central library: {}",
+                        skill.name
+                    );
+                }
+                skills.push(ResolvedBundleSkill {
+                    id: skill.id,
+                    name: skill.name,
+                    skill_md: skill_md.to_string_lossy().to_string(),
+                });
+            }
+            print_json(
+                &BundleResolveReport {
+                    slug,
+                    stage,
+                    instructions: manifest.instructions,
+                    skills,
+                },
+                json,
+            );
+        }
+        BundleCommand::ExportEntry { slug, dest } => {
+            let manifest = bundle::read_manifest(&bundle_path(&slug)?)?;
+            let parent = dest
+                .parent()
+                .context("entry destination needs a parent directory")?;
+            if !parent.as_os_str().is_empty() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::create_dir(&dest)
+                .with_context(|| format!("entry destination already exists: {}", dest.display()))?;
+            std::fs::write(dest.join("SKILL.md"), bundle_entry_content(&manifest)?)?;
+            print_json(&serde_json::json!({"slug": slug, "entry_dir": dest}), json);
+        }
+        BundleCommand::Deploy {
+            slug,
+            agents,
+            dry_run,
+        } => {
+            let manifest = bundle::read_manifest(&bundle_path(&slug)?)?;
+            validate_bundle_skills(&manifest, store)?;
+            let paths = validate_bundle_agent_targets(store, &slug, &agents)?;
+            let entry_source = bundle_entry_source(&slug);
+            let existing = store
+                .get_all_skills()?
+                .into_iter()
+                .find(|skill| skill.name == slug);
+            if let Some(entry) = existing {
+                let source_matches = entry.source_type == "local"
+                    && entry.source_ref.as_deref() == Some(entry_source.to_string_lossy().as_ref());
+                if !source_matches {
+                    bail!("bundle slug collides with an unrelated library skill: {slug}");
+                }
+                print_json(
+                    &run_skill_deployment(store, &[slug], &agents, true, dry_run)?,
+                    json,
+                );
+            } else {
+                for path in &paths {
+                    if Path::new(path).exists() {
+                        bail!("refusing to replace an unmanaged agent skill: {path}");
+                    }
+                }
+                if dry_run {
+                    print_json(
+                        &BundleDeployPreview {
+                            slug,
+                            dry_run: true,
+                            install_entry: true,
+                            target_paths: paths,
+                        },
+                        json,
+                    );
+                } else {
+                    std::fs::create_dir_all(&entry_source)?;
+                    let entry_file = entry_source.join("SKILL.md");
+                    let content = bundle_entry_content(&manifest)?;
+                    if entry_file.exists() && std::fs::read_to_string(&entry_file)? != content {
+                        bail!(
+                            "generated bundle entry was modified: {}",
+                            entry_file.display()
+                        );
+                    }
+                    std::fs::write(&entry_file, content)?;
+                    install_local_action(
+                        store,
+                        &entry_source.to_string_lossy(),
+                        Some(&slug),
+                        None,
+                    )?;
+                    print_json(
+                        &run_skill_deployment(store, &[slug], &agents, true, false)?,
+                        json,
+                    );
+                }
+            }
+        }
+        BundleCommand::Undeploy {
+            slug,
+            agents,
+            dry_run,
+        } => {
+            bundle::read_manifest(&bundle_path(&slug)?)?;
+            let entry = resolve_skill(store, &slug)?;
+            if entry.source_type != "local"
+                || entry.source_ref.as_deref()
+                    != Some(bundle_entry_source(&slug).to_string_lossy().as_ref())
+            {
+                bail!("bundle slug collides with an unrelated library skill: {slug}");
+            }
+            print_json(
+                &run_skill_deployment(store, &[slug], &agents, false, dry_run)?,
+                json,
+            );
+        }
+    }
+    Ok(())
 }
 
 // ── tools ─────────────────────────────────────────────────────────────────

@@ -4,6 +4,8 @@
 
 A bundle is a reusable task workflow. A user invokes `$<bundle>` in Codex or `/<bundle>` in Hermes. The agent reads a small entry skill, then asks Skills Manager which stage is ready and reads only the skills needed for that stage. The original skills remain independent library entries and retain their own update sources.
 
+Imported manifests live under the central skills Git repository at `.skills-manager/bundles/<slug>.yaml`, alongside existing Skills Manager metadata, so ordinary Git backup includes them.
+
 ## Boundaries
 
 - A **skill** supplies one capability or procedure.
@@ -25,7 +27,7 @@ stages:
     skills: [frontend-design]
   - id: review
     after: [build]
-    when: page_available
+    when: page-available
     skills: [web-design-reviewer]
 ```
 
@@ -34,9 +36,11 @@ stages:
 ## First CLI surface
 
 - `bundles list` and `bundles show <slug>` inspect definitions.
-- `bundles validate <manifest>` returns structured errors without changing state.
-- `bundles resolve <slug> --stage <id> [--fact page_available=true] --json` returns that stage's instructions and canonical SKILL.md paths. It reads neither prior nor future skill bodies.
-- `bundles deploy <slug> --agent codex|hermes --dry-run` previews a generated entry skill and refuses to overwrite an unmanaged target.
+- `bundles validate <manifest>` checks structure and library references without changing state.
+- `bundles import <manifest>` saves a manifest and resolves skill names to stable library IDs.
+- `bundles resolve <slug> --stage <id> [--completed build] [--fact page-available=true] --json` returns that stage's instructions and canonical SKILL.md paths. It reads neither prior nor future skill bodies.
+- `bundles export-entry <slug> --dest <directory>` creates a small ordinary entry skill for inspection or manual installation.
+- `bundles deploy <slug> --agent codex|hermes [--dry-run]` installs that entry as a managed library skill and deploys it through the existing conflict-protected flow. `bundles undeploy` removes only its managed Agent copy.
 
 The entry skill tells the agent to call `resolve` at each stage and read only returned paths. Hermes's native bundle feature is not used for this route because it loads all listed skills at invocation time.
 
@@ -52,6 +56,6 @@ The entry skill tells the agent to call `resolve` at each stage and read only re
 ## Integration order
 
 1. Manifest parser, validator, and resolver in the Rust core, with focused tests.
-2. CLI commands and generated entry skill for Codex and Hermes.
+2. CLI commands and generated entry skill for Codex and Hermes, using existing skill deployment for the entry.
 3. Conversation-level acceptance on both agents.
 4. Desktop UI editor and Git backup serialization after the runtime behavior is verified.
